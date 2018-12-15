@@ -17,7 +17,7 @@ package certs
 import (
 	"time"
 
-	"github.com/cilium/cilium-etcd-operator/pkg/defaults"
+	"github.com/manojbadam/cilium-etcd-operator/pkg/defaults"
 
 	"github.com/cloudflare/cfssl/cli/genkey"
 	"github.com/cloudflare/cfssl/config"

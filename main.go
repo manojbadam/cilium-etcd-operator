@@ -22,11 +22,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cilium/cilium-etcd-operator/certs"
-	"github.com/cilium/cilium-etcd-operator/cilium-etcd-cluster"
-	"github.com/cilium/cilium-etcd-operator/etcd-operator"
-	"github.com/cilium/cilium-etcd-operator/pkg/defaults"
-	"github.com/cilium/cilium-etcd-operator/pkg/k8s"
+	"github.com/manojbadam/cilium-etcd-operator/certs"
+	"github.com/manojbadam/cilium-etcd-operator/cilium-etcd-cluster"
+	"github.com/manojbadam/cilium-etcd-operator/etcd-operator"
+	"github.com/manojbadam/cilium-etcd-operator/pkg/defaults"
+	"github.com/manojbadam/cilium-etcd-operator/pkg/k8s"
 
 	"github.com/coreos/etcd-operator/pkg/apis/etcd/v1beta2"
 	"github.com/sirupsen/logrus"
@@ -75,13 +75,16 @@ var (
 		},
 	}
 
-	clusterDomain  string
-	clusterSize    int
-	gracePeriodSec int64
-	etcdVersion    string
-	gracePeriod    time.Duration
-	namespace      string
-	preFlight      bool
+	clusterDomain           string
+	clusterSize             int
+	gracePeriodSec          int64
+	etcdVersion             string
+	gracePeriod             time.Duration
+	namespace               string
+	preFlight               bool
+	generateCerts           bool
+	operatorImage           string
+	operatorImagePullSecret string
 
 	etcdCRD        *apiExt_v1beta1.CustomResourceDefinition
 	etcdDeployment *apps_v1beta2.Deployment
@@ -115,6 +118,12 @@ func init() {
 
 	viper.BindEnv("pod-name", "CILIUM_ETCD_OPERATOR_POD_NAME")
 	viper.BindEnv("pod-uid", "CILIUM_ETCD_OPERATOR_POD_UID")
+	flags.BoolVar(&generateCerts, "generate-certs", false, "Generate and deploy TLS certificates")
+	viper.BindEnv("generate-certs", "CILIUM_ETCD_OPERATOR_GENERATE_CERTS")
+	flags.StringVar(&operatorImage, "operator-image", defaults.OperatorImage, "Operator Image to be used")
+	viper.BindEnv("operator-image", "CILIUM_ETCD_OPERATOR_IMAGE")
+	flags.StringVar(&operatorImagePullSecret, "operator-image-pull-secret", "", "Secret to be used for Image Pull")
+	viper.BindEnv("operator-image-pull-secret", "CILIUM_ETCD_OPERATOR_IMAGE_PULL_SECRET")
 	viper.BindPFlags(flags)
 }
 
@@ -127,9 +136,17 @@ func parseFlags() {
 	ownerName := viper.GetString("pod-name")
 	ownerUID := viper.GetString("pod-uid")
 	preFlight = viper.GetBool("pre-flight")
+	generateCerts = viper.GetBool("generate-certs")
+	operatorImage = viper.GetString("operator-image")
+	operatorImagePullSecret = viper.GetString("operator-image-pull-secret")
+
+	log.Info("Debug Info")
+	log.Info("Generate Certificates", generateCerts)
+	log.Info("Operator Image", operatorImage)
+	log.Info("Operator Image Pull Secrets", operatorImagePullSecret)
 
 	etcdCRD = etcd_operator.EtcdCRD(ownerName, ownerUID)
-	etcdDeployment = etcd_operator.EtcdOperatorDeployment(namespace, ownerName, ownerUID)
+	etcdDeployment = etcd_operator.EtcdOperatorDeployment(namespace, ownerName, ownerUID, operatorImage, operatorImagePullSecret)
 	ciliumEtcdCR = cilium_etcd_cluster.CiliumEtcdCluster(namespace, etcdVersion, clusterSize)
 	gracePeriod = time.Duration(gracePeriodSec) * time.Second
 }
@@ -162,22 +179,30 @@ func run() error {
 	if err != nil {
 		panic(err)
 	}
-	// generate all certificates that we will use
-	m, err := certs.GenCertificates(namespace, clusterDomain)
-	if err != nil {
-		return err
-	}
-	// Deploying all secrets
-	err = deploySecrets(namespace, m)
-	if err != nil {
-		return err
-	}
-	// We don't need to certificates so we can clean them up
-	m = map[string]map[string][]byte{}
 
-	err = deriveCiliumSecrets()
-	if err != nil {
-		return err
+	// Generate and create TLS Certs based on the commandline flags
+	if generateCerts {
+		log.Info("Generating TLS certificates...")
+		// generate all certificates that we will use
+		m, err := certs.GenCertificates(namespace, clusterDomain)
+		if err != nil {
+			return err
+		}
+		// Deploying all secrets
+		err = deploySecrets(namespace, m)
+		if err != nil {
+			return err
+		}
+		// We don't need to certificates so we can clean them up
+		m = map[string]map[string][]byte{}
+
+		err = deriveCiliumSecrets()
+		if err != nil {
+			return err
+		}
+
+	} else {
+		log.Info("Skipping TLS Certificates generation..")
 	}
 
 	err = deployETCD()
@@ -201,7 +226,30 @@ func run() error {
 		default:
 		}
 		time.Sleep(2 * time.Second)
-		pl, err := k8s.Client().CoreV1().Pods(namespace).List(meta_v1.ListOptions{
+		operator, err := k8s.Client().CoreV1().Pods(namespace).List(meta_v1.ListOptions{
+			LabelSelector: "k8s_app=etcd-operator",
+			FieldSelector: "status.phase=Running",
+		})
+		if err != nil {
+			log.Error(err)
+			continue
+		}
+		if len(operator.Items) == 0 {
+			log.Info("No running etcd operator pod found. Recreating the operator...")
+			err := deployEtcdOperator()
+			if err != nil {
+				log.Error(err)
+				continue
+			}
+			log.Infof("Sleeping for %s to allow cluster to come up...", gracePeriod)
+			select {
+			case <-cleanUPSig:
+				return nil
+			case <-time.Tick(gracePeriod):
+			}
+			continue
+		}
+		etcd, err := k8s.Client().CoreV1().Pods(namespace).List(meta_v1.ListOptions{
 			LabelSelector: "etcd_cluster=cilium-etcd",
 			FieldSelector: "status.phase=Running",
 		})
@@ -209,7 +257,7 @@ func run() error {
 			log.Error(err)
 			continue
 		}
-		if len(pl.Items) == 0 {
+		if len(etcd.Items) == 0 {
 			log.Info("No running etcd pod found. Bootstrapping from scratch...")
 			err := deployCiliumCR(true)
 			if err != nil {
@@ -242,25 +290,30 @@ func deployETCD() error {
 	}
 	log.Info("Done!")
 
-	log.Info("Deploying etcd-operator deployment...")
-	etcdDeplyServer, err := k8s.Client().AppsV1beta2().Deployments(etcdDeployment.Namespace).Get(etcdDeployment.Name, meta_v1.GetOptions{})
-	switch {
-	case err == nil:
-		etcdCpy := etcdDeployment.DeepCopy()
-		etcdCpy.UID = etcdDeplyServer.UID
-		_, err = k8s.Client().AppsV1beta2().Deployments(etcdDeployment.Namespace).Update(etcdDeployment)
-		if err != nil {
-			return fmt.Errorf("unable to update etcd-operator deployment: %s", err)
-		}
-	case errors.IsNotFound(err):
-		_, err := k8s.Client().AppsV1beta2().Deployments(etcdDeployment.Namespace).Create(etcdDeployment)
-		if err != nil {
-			return fmt.Errorf("unable to create etcd-operator deployment: %s", err)
-		}
-	default:
+	// log.Info("Deploying etcd-operator deployment...")
+	// etcdDeplyServer, err := k8s.Client().AppsV1beta2().Deployments(etcdDeployment.Namespace).Get(etcdDeployment.Name, meta_v1.GetOptions{})
+	// switch {
+	// case err == nil:
+	// 	etcdCpy := etcdDeployment.DeepCopy()
+	// 	etcdCpy.UID = etcdDeplyServer.UID
+	// 	_, err = k8s.Client().AppsV1beta2().Deployments(etcdDeployment.Namespace).Update(etcdDeployment)
+	// 	if err != nil {
+	// 		return fmt.Errorf("unable to update etcd-operator deployment: %s", err)
+	// 	}
+	// case errors.IsNotFound(err):
+	// 	deployment, err := k8s.Client().AppsV1beta2().Deployments(etcdDeployment.Namespace).Create(etcdDeployment)
+	// 	log.Info(*deployment)
+	// 	if err != nil {
+	// 		return fmt.Errorf("unable to create etcd-operator deployment: %s", err)
+	// 	}
+	// default:
+	// 	return fmt.Errorf("unable to get etcd-operator deployment: %s", err)
+	// }
+	// log.Info("Done!")
+	err = deployEtcdOperator()
+	if err != nil {
 		return fmt.Errorf("unable to get etcd-operator deployment: %s", err)
 	}
-	log.Info("Done!")
 
 	return deployCiliumCR(false)
 }
@@ -282,6 +335,30 @@ func deployCiliumCR(force bool) error {
 		return fmt.Errorf("unable to get Cilium etcd cluster CR: %s", err)
 	}
 	log.Info("Done")
+	return nil
+}
+
+func deployEtcdOperator() error {
+	log.Info("Deploying etcd-operator deployment...")
+	etcdDeplyServer, err := k8s.Client().AppsV1beta2().Deployments(etcdDeployment.Namespace).Get(etcdDeployment.Name, meta_v1.GetOptions{})
+	switch {
+	case err == nil:
+		etcdCpy := etcdDeployment.DeepCopy()
+		etcdCpy.UID = etcdDeplyServer.UID
+		_, err = k8s.Client().AppsV1beta2().Deployments(etcdDeployment.Namespace).Update(etcdDeployment)
+		if err != nil {
+			return fmt.Errorf("unable to update etcd-operator deployment: %s", err)
+		}
+	case errors.IsNotFound(err):
+		deployment, err := k8s.Client().AppsV1beta2().Deployments(etcdDeployment.Namespace).Create(etcdDeployment)
+		log.Info(*deployment)
+		if err != nil {
+			return fmt.Errorf("unable to create etcd-operator deployment: %s", err)
+		}
+	default:
+		return fmt.Errorf("unable to get etcd-operator deployment: %s", err)
+	}
+	log.Info("Done!")
 	return nil
 }
 

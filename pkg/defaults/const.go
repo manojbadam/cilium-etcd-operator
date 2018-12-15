@@ -19,14 +19,20 @@ var (
 		"io.cilium/app": "etcd-operator",
 	}
 
-	CiliumEtcdClientTLS = "cilium-etcd-client-tls"
-	CiliumEtcdServerTLS = "cilium-etcd-server-tls"
-	CiliumEtcdPeerTLS   = "cilium-etcd-peer-tls"
-	CiliumEtcdSecrets   = "cilium-etcd-secrets"
+	OperatorLabelsApp = map[string]string{
+		"k8s_app": "etcd-operator",
+	}
+
+	CiliumEtcdClientTLS = "etcd-client-tls"
+	CiliumEtcdServerTLS = "etcd-server-tls"
+	CiliumEtcdPeerTLS   = "etcd-peer-tls"
+	CiliumEtcdSecrets   = "etcd-secrets"
 
 	ETCDVersion = "3.3.10"
 
 	ClusterSize = 3
+
+	OperatorImage = "quay.io/coreos/etcd-operator:v0.9.3"
 
 	DefaultNamespace = "kube-system"
 

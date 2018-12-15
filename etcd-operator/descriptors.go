@@ -15,7 +15,7 @@
 package etcd_operator
 
 import (
-	"github.com/cilium/cilium-etcd-operator/pkg/defaults"
+	"github.com/manojbadam/cilium-etcd-operator/pkg/defaults"
 
 	apps_v1beta2 "k8s.io/api/apps/v1beta2"
 	core_v1 "k8s.io/api/core/v1"
@@ -28,9 +28,9 @@ var blockOwnerDeletion = true
 
 // EtcdOperatorDeployment returns the etcd operator deployment that is
 // for the given namespace.
-func EtcdOperatorDeployment(namespace, ownerName, ownerUID string) *apps_v1beta2.Deployment {
+func EtcdOperatorDeployment(namespace, ownerName, ownerUID, operatorImage, operatorImagePullSecret string) *apps_v1beta2.Deployment {
 	nReplicas := int32(1)
-	return &apps_v1beta2.Deployment{
+	output := apps_v1beta2.Deployment{
 		ObjectMeta: meta_v1.ObjectMeta{
 			Name:      "etcd-operator",
 			Namespace: namespace,
@@ -47,18 +47,18 @@ func EtcdOperatorDeployment(namespace, ownerName, ownerUID string) *apps_v1beta2
 		Spec: apps_v1beta2.DeploymentSpec{
 			Replicas: &nReplicas,
 			Selector: &meta_v1.LabelSelector{
-				MatchLabels: defaults.CiliumLabelsApp,
+				MatchLabels: defaults.OperatorLabelsApp,
 			},
 			Template: core_v1.PodTemplateSpec{
 				ObjectMeta: meta_v1.ObjectMeta{
-					Labels: defaults.CiliumLabelsApp,
+					Labels: defaults.OperatorLabelsApp,
 				},
 				Spec: core_v1.PodSpec{
 					ServiceAccountName: "cilium-etcd-sa",
 					Containers: []core_v1.Container{
 						{
 							Name:  "etcd-operator",
-							Image: "quay.io/coreos/etcd-operator:v0.9.3",
+							Image: operatorImage,
 							Command: []string{
 								"etcd-operator",
 								// Uncomment to act for resources in all
@@ -90,6 +90,14 @@ func EtcdOperatorDeployment(namespace, ownerName, ownerUID string) *apps_v1beta2
 			},
 		},
 	}
+
+	imagePullSecret := core_v1.LocalObjectReference{Name: operatorImagePullSecret}
+
+	if operatorImagePullSecret != "" {
+		output.Spec.Template.Spec.ImagePullSecrets = []core_v1.LocalObjectReference{}
+		output.Spec.Template.Spec.ImagePullSecrets = append(output.Spec.Template.Spec.ImagePullSecrets, imagePullSecret)
+	}
+	return &output
 }
 
 // EtcdCRD returns the etcd CRD.

@@ -15,7 +15,7 @@
 package cilium_etcd_cluster
 
 import (
-	"github.com/cilium/cilium-etcd-operator/pkg/defaults"
+	"github.com/manojbadam/cilium-etcd-operator/pkg/defaults"
 
 	"github.com/coreos/etcd-operator/pkg/apis/etcd/v1beta2"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
