@@ -140,11 +140,6 @@ func parseFlags() {
 	operatorImage = viper.GetString("operator-image")
 	operatorImagePullSecret = viper.GetString("operator-image-pull-secret")
 
-	log.Info("Debug Info")
-	log.Info("Generate Certificates", generateCerts)
-	log.Info("Operator Image", operatorImage)
-	log.Info("Operator Image Pull Secrets", operatorImagePullSecret)
-
 	etcdCRD = etcd_operator.EtcdCRD(ownerName, ownerUID)
 	etcdDeployment = etcd_operator.EtcdOperatorDeployment(namespace, ownerName, ownerUID, operatorImage, operatorImagePullSecret)
 	ciliumEtcdCR = cilium_etcd_cluster.CiliumEtcdCluster(namespace, etcdVersion, clusterSize)
@@ -226,29 +221,6 @@ func run() error {
 		default:
 		}
 		time.Sleep(2 * time.Second)
-		operator, err := k8s.Client().CoreV1().Pods(namespace).List(meta_v1.ListOptions{
-			LabelSelector: "k8s_app=etcd-operator",
-			FieldSelector: "status.phase=Running",
-		})
-		if err != nil {
-			log.Error(err)
-			continue
-		}
-		if len(operator.Items) == 0 {
-			log.Info("No running etcd operator pod found. Recreating the operator...")
-			err := deployEtcdOperator()
-			if err != nil {
-				log.Error(err)
-				continue
-			}
-			log.Infof("Sleeping for %s to allow cluster to come up...", gracePeriod)
-			select {
-			case <-cleanUPSig:
-				return nil
-			case <-time.Tick(gracePeriod):
-			}
-			continue
-		}
 		etcd, err := k8s.Client().CoreV1().Pods(namespace).List(meta_v1.ListOptions{
 			LabelSelector: "etcd_cluster=cilium-etcd",
 			FieldSelector: "status.phase=Running",
@@ -290,26 +262,6 @@ func deployETCD() error {
 	}
 	log.Info("Done!")
 
-	// log.Info("Deploying etcd-operator deployment...")
-	// etcdDeplyServer, err := k8s.Client().AppsV1beta2().Deployments(etcdDeployment.Namespace).Get(etcdDeployment.Name, meta_v1.GetOptions{})
-	// switch {
-	// case err == nil:
-	// 	etcdCpy := etcdDeployment.DeepCopy()
-	// 	etcdCpy.UID = etcdDeplyServer.UID
-	// 	_, err = k8s.Client().AppsV1beta2().Deployments(etcdDeployment.Namespace).Update(etcdDeployment)
-	// 	if err != nil {
-	// 		return fmt.Errorf("unable to update etcd-operator deployment: %s", err)
-	// 	}
-	// case errors.IsNotFound(err):
-	// 	deployment, err := k8s.Client().AppsV1beta2().Deployments(etcdDeployment.Namespace).Create(etcdDeployment)
-	// 	log.Info(*deployment)
-	// 	if err != nil {
-	// 		return fmt.Errorf("unable to create etcd-operator deployment: %s", err)
-	// 	}
-	// default:
-	// 	return fmt.Errorf("unable to get etcd-operator deployment: %s", err)
-	// }
-	// log.Info("Done!")
 	err = deployEtcdOperator()
 	if err != nil {
 		return fmt.Errorf("unable to get etcd-operator deployment: %s", err)
