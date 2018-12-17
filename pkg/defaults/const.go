@@ -20,7 +20,8 @@ var (
 	}
 
 	OperatorLabelsApp = map[string]string{
-		"k8s_app": "etcd-operator",
+		"k8s_app":       "etcd-operator",
+		"io.cilium/app": "etcd-operator",
 	}
 
 	CiliumEtcdClientTLS = "etcd-client-tls"
