@@ -119,7 +119,7 @@ func init() {
 		"generate-certs", true, "Generate and deploy TLS certificates")
 	viper.BindEnv("generate-certs", "CILIUM_ETCD_OPERATOR_GENERATE_CERTS")
 	flags.StringVar(&operatorImage,
-		"operator-image", defaults.DefaultOperatorImage, "Operator Image to be used")
+		"operator-image", defaults.DefaultOperatorImage, "Etcd Operator Image to be used")
 	viper.BindEnv("operator-image", "CILIUM_ETCD_OPERATOR_IMAGE")
 	flags.StringVar(&operatorImagePullSecret,
 		"operator-image-pull-secret", "", "Secret to be used for Image Pull")
